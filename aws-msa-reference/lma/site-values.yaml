@@ -33,7 +33,7 @@ charts:
     prometheus.prometheusSpec.retention: 2d
     prometheus.prometheusSpec.externalLabels.taco_cluster: $(clusterName)
     prometheus.prometheusSpec.nodeSelector: $(nodeSelector)
-    
+
     alertmanager.service.type: NodePort
     alertmanager.service.nodePort: 30111
     alertmanager.alertmanagerSpec.alertmanagerConfigSelector.matchLabels.alertmanagerConfig: example
@@ -41,7 +41,7 @@ charts:
     alertmanager.alertmanagerSpec.retention: 2h
     alertmanager.config.global.slack_api_url: https://hooks.slack.com/services/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
 
-- name: prometheus-node-exporter  
+- name: prometheus-node-exporter
   override:
     hostNetwork: false
 
@@ -98,23 +98,112 @@ charts:
     fluentbit:
       clusterName: $(clusterName)
       outputs:
-        loki: 
+   es:
+    - name: taco-es
+      host: eck-elasticsearch-es-http
+      port: 9200
+
+      dedicatedUser:
+        username: taco-fluentbit
+        password: password
+        elasticPasswordSecret: eck-elasticsearch-es-elastic-user
+
+      template:
+        enabled: true
+        ilms:
+        - name: hot-delete-14days
+          json:
+            policy:
+              phases:
+                hot:
+                  actions:
+                    rollover:
+                      max_size: 30gb
+                      max_age: 1d
+                      max_docs: 5000000000
+                    set_priority:
+                      priority: 100
+                delete:
+                  min_age: 14d
+                  actions:
+                    delete: {}
+        - name: hot-delete-7days
+          json:
+            policy:
+              phases:
+                hot:
+                  actions:
+                    rollover:
+                      max_size: 30gb
+                      max_age: 1d
+                      max_docs: 5000000000
+                    set_priority:
+                      priority: 100
+                delete:
+                  min_age: 7d
+                  actions:
+                    delete: {}
+        - name: hot-delete-3hour
+          json:
+            policy:
+              phases:
+                hot:
+                  actions:
+                    rollover:
+                      max_size: 30gb
+                      max_age: 1h
+                      max_docs: 5000000000
+                    set_priority:
+                      priority: 100
+                delete:
+                  min_age: 3h
+                  actions:
+                    delete: {}
+        templates:
+        - name: platform
+          json:
+            index_patterns: "platform*"
+            settings:
+              refresh_interval: 30s
+              number_of_shards: 3
+              number_of_replicas: 1
+              index.lifecycle.name: hot-delete-14days
+              index.lifecycle.rollover_alias: platform
+        - name: application
+          json:
+            index_patterns: "container*"
+            settings:
+              refresh_interval: 30s
+              number_of_shards: 3
+              number_of_replicas: 1
+              index.lifecycle.name: hot-delete-3hour
+              index.lifecycle.rollover_alias: container
+        - name: syslog
+          json:
+            index_patterns: "syslog*"
+            settings:
+              refresh_interval: 30s
+              number_of_shards: 2
+              number_of_replicas: 1
+              index.lifecycle.name: hot-delete-14days
+              index.lifecycle.rollover_alias: syslog
+        loki:
         - name: taco-loki
           host: loki-loki-distributed-gateway
           port: 80
-      targetLogs: 
+      targetLogs:
       - tag: kube.*
         bufferChunkSize: 2M
         bufferMaxSize: 5M
-        do_not_store_as_default: false
+        do_not_store_as_default: true
+        es_name: taco-es
         index: container
-        loki_name: taco-loki
         memBufLimit: 20MB
         multi_index:
         - index: platform
-          loki_name: taco-loki
+          es_name: taco-es
           key: $kubernetes['namespace_name']
-          value: kube-system|taco-system|lma|argo
+          value: argo|elastic-system|gitea|harbor|ingress-nginx|istio-ingress|istio-system|keycloak|kube-node-lease|kube-public|kube-system|lma|taco-system|tks
         parser: docker
         path: /var/log/containers/*.log
         type: kubernates
@@ -154,10 +243,10 @@ charts:
         config:
           path: "/tmp/kubernetes-event.log"
     addons:
-      loki: 
+      loki:
         enabled: true
         host: loki
-        port: 3100      
+        port: 3100
         target_file: "/tmp/kubernetes-event.log"
 
     conf.default.hosts:
